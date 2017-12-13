@@ -1,9 +1,0 @@
-apiVersion: demo.crimsonfaith91.com/v1
-kind: BGDeployment
-metadata:
-  name: blue-green-deployment
-  namespace: default
-  labels:
-    app: nginx
-spec:
-  image: nginx:1.7.9
