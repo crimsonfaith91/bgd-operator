@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	demov1 "k8s.io/bgd-operator/pkg/apis/demo/v1"
 	"k8s.io/client-go/kubernetes"
+	typedv1beta1 "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
@@ -143,6 +144,10 @@ func (f *crdclient) CreateReplicaSet(name, color string, obj *demov1.BGDeploymen
 	return f.c.ExtensionsV1beta1().ReplicaSets(obj.Namespace).Create(newReplicaSet(name, color, obj))
 }
 
+func (f *crdclient) ListReplicaSet(namespace string) (*extensionsv1beta1.ReplicaSetList, error) {
+	return f.c.ExtensionsV1beta1().ReplicaSets(namespace).List(metav1.ListOptions{})
+}
+
 func (f *crdclient) DeleteReplicaSet(rs *extensionsv1beta1.ReplicaSet) error {
 	background := metav1.DeletePropagationBackground
 	return f.c.ExtensionsV1beta1().ReplicaSets(rs.Namespace).Delete(rs.Name, &metav1.DeleteOptions{PropagationPolicy: &background})
@@ -211,6 +216,36 @@ func (f *crdclient) WaitAllPodsAvailable(rs *extensionsv1beta1.ReplicaSet, pollI
 		return false
 	}
 	return true
+}
+
+func updateRS(rsClient typedv1beta1.ReplicaSetInterface, rsName string, updateFunc func(*extensionsv1beta1.ReplicaSet)) (*extensionsv1beta1.ReplicaSet, error) {
+	var rs *extensionsv1beta1.ReplicaSet
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		newRS, err := rsClient.Get(rsName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		updateFunc(newRS)
+		rs, err = rsClient.Update(newRS)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("Failed to update rs %s: %v", rsName, err)
+	}
+	return rs, nil
+}
+
+func (f *crdclient) ScaleReplicaSet(rs *extensionsv1beta1.ReplicaSet, replicas int32) error {
+	rsClient := f.c.ExtensionsV1beta1().ReplicaSets(rs.Namespace)
+	rs, err := updateRS(rsClient, rs.Name, func(rs *extensionsv1beta1.ReplicaSet) {
+		*rs.Spec.Replicas = replicas
+	})
+	if err != nil {
+		return err
+	}
+	if !f.WaitAllPodsAvailable(rs, 100*time.Millisecond, 5*time.Second) {
+		return fmt.Errorf("failed to scale down RS %q", rs.Name)
+	}
+	return nil
 }
 
 func NewClient(cfg *rest.Config) (*rest.RESTClient, *runtime.Scheme, error) {

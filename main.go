@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	demov1 "k8s.io/bgd-operator/pkg/apis/demo/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -61,8 +62,7 @@ func main() {
 
 	crdclient := CrdClient(kubeClient, crdcs, scheme, "default")
 	image := "nginx:1.7.9"
-	colors := []string{"blue", "green"}
-	colorIdx := 0
+	colorMap := map[string]string{"blue": "green", "green": "blue"}
 	var rs *extensionsv1beta1.ReplicaSet
 	var svc *corev1.Service
 
@@ -109,9 +109,41 @@ func main() {
 				// Only create the new RS when the image is changed
 				if newImage != image {
 					image = newImage
-					newColor := colors[(colorIdx+1)%2]
+					var newColor string
 
-					// Create another RS with new color
+					// Before creating another RS, look for RS with zero replica
+					// If the RS with zero replica exists, update new color with its color and delete it
+					// Else, update the new color with another color
+					rss, err := crdclient.ListReplicaSet(bgd.Namespace)
+					if err != nil {
+						panic(fmt.Sprintf("failed to list RSs: %v", err))
+					}
+					for _, curRS := range rss.Items {
+						selectorMap, err := metav1.LabelSelectorAsMap(curRS.Spec.Selector)
+						if err != nil {
+							panic(fmt.Sprintf("failed to convert label selector of RS %q to a map: %v", curRS.Name, err))
+						}
+						curColor := selectorMap["color"]
+
+						if curRS.Status.AvailableReplicas == 0 {
+							// Update the new color with color of the RS with zero replica
+							newColor = curColor
+
+							// Delete the RS with zero replica
+							err = crdclient.DeleteReplicaSet(&curRS)
+							if err != nil {
+								panic(fmt.Sprintf("failed to delete RS %q with zero replica before creating a new RS with newest image name: %v", curRS.Name, err))
+							}
+
+							// Immediate break out for the loop to prevent the new color from being updated again
+							break
+						} else {
+							// Update the new color with another color
+							newColor = colorMap[curColor]
+						}
+					}
+
+					// Create a new RS with the new color
 					newRS, err := crdclient.CreateReplicaSet(fmt.Sprintf("%s-rs", newColor), newColor, bgd)
 					if err != nil {
 						panic(fmt.Sprintf("failed to create new RS when image is changed: %v", err))
@@ -120,12 +152,6 @@ func main() {
 					// Determine whether all pods of the new RS are available (i.e., ready)
 					allNewPodsAvailable := crdclient.WaitAllPodsAvailable(newRS, 100*time.Millisecond, 5*time.Second)
 					if allNewPodsAvailable {
-						// Delete the old RS
-						err = crdclient.DeleteReplicaSet(rs)
-						if err != nil {
-							panic(fmt.Sprintf("failed to delete old RS when image is updated: %v", err))
-						}
-
 						// Update service to point to the new RS
 						svc, err = crdclient.UpdateService(svc.Name, bgd.Namespace, func(service *corev1.Service) {
 							updatedLabels := map[string]string{"color": newColor}
@@ -136,16 +162,19 @@ func main() {
 							panic(fmt.Sprintf("failed to update service to point to new RS, %q: %v", newRS.Name, err))
 						}
 
+						// Scale down the old RS to zero replica
+						err = crdclient.ScaleReplicaSet(rs, 0)
+						if err != nil {
+							panic(fmt.Sprintf("failed to scale down old RS to zero replica: %v", err))
+						}
+
 						// Change rs variable to point to newRS
 						rs = newRS
-
-						// Change color index to point to new color
-						colorIdx++
 					} else {
-						// Delete the new RS
-						err = crdclient.DeleteReplicaSet(newRS)
+						// Scale down the new RS to zero replica
+						err = crdclient.ScaleReplicaSet(newRS, 0)
 						if err != nil {
-							panic(fmt.Sprintf("failed to delete new RS, %q when not all its pods are available: %v", newRS.Name, err))
+							panic(fmt.Sprintf("failed to scale down new RS to zero replica: %v", err))
 						}
 					}
 				}
