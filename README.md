@@ -34,7 +34,7 @@ hack/local-up-cluster.sh
 cd kubernetes/staging/src/k8s.io/bgd-operator
 
 # run the operator; kubeconfig is not required if operating in-cluster
-$ go run *.go -kubeconf=/var/run/kubernetes/admin.kubeconfig
+go run *.go -kubeconf=/var/run/kubernetes/admin.kubeconfig
 
 ### third terminal ###
 
@@ -45,13 +45,13 @@ cd kubernetes/staging/src/k8s.io/bgd-operator
 export KUBECONFIG=/var/run/kubernetes/admin.kubeconfig
 
 # create a CustomResourceDefinition
-$ kubectl create -f crd.yaml
+kubectl create -f crd.yaml
 
 # create a custom resource of type BGDeployment
-$ kubectl create -f bgd.yaml
+kubectl create -f bgd.yaml
 
 # check replicasets, pods, and service created through the custom resource
-$ kubectl get all
+kubectl get all
 ```
 
 When the `BGDeployment` custom resource is created, the operator will create a replicaset of 1 replica with `color=blue` label and a service with same color label.
@@ -65,7 +65,7 @@ The operator will create a new replicaset ONLY when there is a change of **.spec
 
 # edit the BGDeployment custom resource template by changing ".spec.image" field
 # e.g., from "nginx:1.7.9" to "nginx:1.7.10"
-$ kubectl edit bgdeployment blue-green-deployment
+kubectl edit bgdeployment blue-green-deployment
 ```
 
 Regardless a new rollout is successful or not, the operator will create a new replicaset. If the new rollout is successful (all pods of the new replicaset is ready and available within certain timeout period), the operator will point the service to the new replicaset and scale down the old replicaset to 0. Otherwise, it will scale down the new replicaset instead (the old replicaset and service stay intact). The zero-replica replicaset will be replaced during next successful rollout.
@@ -74,13 +74,13 @@ Regardless a new rollout is successful or not, the operator will create a new re
 
 You can clean up the CRD with:
 
-    $ kubectl delete crd bgdeployments.demo.google.com
+    kubectl delete crd bgdeployments.demo.google.com
 
 CRD deletion cleans up the custom resource.
 
 You can also clean up the custom resource with:
 
-    $ kubectl delete bgdeployment blue-green-deployment
+    kubectl delete bgdeployment blue-green-deployment
 
 Custom resource deletion cleans up replicasets and service created through it.
 
